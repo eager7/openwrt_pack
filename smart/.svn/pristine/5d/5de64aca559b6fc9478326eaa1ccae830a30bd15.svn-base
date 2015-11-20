@@ -1,0 +1,148 @@
+/****************************************************************************
+ *
+ * MODULE:             Zigbee - JIP daemon
+ *
+ * COMPONENT:          SocketServer interface
+ *
+ * REVISION:           $Revision: 43420 $
+ *
+ * DATED:              $Date: 2015-10-01 15:13:17 +0100 (Mon, 18 Jun 2012) $
+ *
+ * AUTHOR:             PCT
+ *
+ ****************************************************************************
+ *
+ * Copyright Tonly B.V. 2015. All rights reserved
+ *
+ ***************************************************************************/
+
+
+#ifndef  ZIGBEE_SQLITE_H_INCLUDED
+#define  ZIGBEE_SQLITE_H_INCLUDED
+
+#if defined __cplusplus
+extern "C" {
+#endif
+
+/****************************************************************************/
+/***        Include files                                                 ***/
+/****************************************************************************/
+
+#include "Threads.h"
+#include <netinet/in.h>
+#include <sqlite3.h>
+#include "list.h"
+
+/****************************************************************************/
+/***        Macro Definitions                                             ***/
+/****************************************************************************/
+
+/****************************************************************************/
+/***        Type Definitions                                              ***/
+/****************************************************************************/
+
+typedef enum
+{
+    E_SQ_OK,
+    E_SQ_ERROR,
+    E_SQ_OPEN_ERROR,
+    E_SQ_ERROR_COMMAND, 
+    E_SQ_NO_FOUND,
+    E_SQ_NO_FOUND_NODE,
+    E_SQ_NO_FOUND_TABLE,
+    E_SQ_NO_FOUND_ENDPOINT,
+    E_SQ_NO_FOUND_CLUSTER,
+    E_SQ_NO_FOUND_ATTRIBUTE,
+    
+} teSQ_Status;
+
+typedef enum
+{
+    E_SQ_UPDATE_ALARM,
+    E_SQ_UPDATE_NAME,
+}teUpdateMode;
+/****************************************************************************/
+/***        Type Definitions                                              ***/
+/****************************************************************************/
+typedef struct _tsZigbeeSqlite
+{
+    sqlite3 *psZgbeeDB;
+    pthread_mutex_t mutex;
+
+}tsZigbeeSqlite;
+
+typedef struct _tsSqlZigbeeNode
+{
+    uint64 u64MacAddress;
+    uint16 u16ShortAddress;
+    uint16 u16DeviceID;
+    char   csDeviceName[MIBF];
+    uint16 u16DeviceAlarm;
+    uint8  u8DeviceOnline;
+    uint16 u16DeviceValue1;
+    uint16 u16DeviceValue2;
+    uint16 u16DeviceValue3;
+    char   *psDeviceDescription;
+    struct dl_list list;
+}tsSqliteZigbeeNode;
+
+
+/****************************************************************************/
+/***        Local Function Prototypes                                     ***/
+/****************************************************************************/
+
+/****************************************************************************/
+/***        Exported Variables                                            ***/
+/****************************************************************************/
+
+/****************************************************************************/
+/***        Local Variables                                               ***/
+/****************************************************************************/
+
+/****************************************************************************/
+/***        Exported Functions                                            ***/
+/****************************************************************************/
+
+teSQ_Status eZigbeeSqliteInit(void);
+teSQ_Status eZigbeeSqliteFinished(void);
+teSQ_Status eZigbeeSqliteOpen(void);
+teSQ_Status eZigbeeSqliteClose(void);
+
+teSQ_Status eZigbeeSqliteCreateNode(uint64 u64MacAddress);
+
+teSQ_Status eZigbeeSqliteReadNodeAttribute(uint64 u64MacAddress, uint16 u16Endpoint, uint16 u16ClusterID, uint16 *u16AttributeValue);
+teSQ_Status eZigbeeSqliteReadNodeDeviceName(uint64 u64MacAddress, char *psDeviceName);
+teSQ_Status eZigbeeSqliteReadNodeDeviceAlarm(uint64 u64MacAddress, uint16 *u16DeviceAlarm);
+teSQ_Status eZigbeeSqliteReadNodeDeviceID(uint64 u64MacAddress, uint16 *u16DeviceID);
+
+teSQ_Status eZigbeeSqliteUpdateAttribute(uint64 u64MacAddress, uint16 u16Endpoint, 
+                                        uint16 u16ClusterID, uint16 u16AttributeID, uint16 u16AttributeValue);
+teSQ_Status eZigbeeSqliteUpdateNodeName(uint64 u64MacAddress, char *psDeviceName);
+teSQ_Status eZigbeeSqliteUpdateNodeAlarm(uint64 u64MacAddress, uint16 u16DeviceAlarm);
+
+teSQ_Status eZigbeeSqliteDeleteCluster(uint64 u64MacAddress, uint16 u16Endpoint,uint16 u16ClusterID);
+teSQ_Status eZigbeeSqliteDeleteNode(uint64 u64MacAddress);
+
+teSQ_Status eZigbeeSqliteAddAttribute(uint64 u64MacAddress, uint16 u16Endpoint, 
+                                    uint16 u16ClusterID, uint16 u16Attribute, uint16 u16AttributeValue);
+teSQ_Status eZigbeeSqliteAddCluster(uint64 u64MacAddress, uint16 u16Endpoint, uint16 u16ClusterID);
+teSQ_Status eZigbeeSqliteAddDeviceName(uint64 u64MacAddress, char *psDeviceName);
+teSQ_Status eZigbeeSqliteAddLastSuccessTime(uint64 u64MacAddress, uint64 u64LastSuccess);
+teSQ_Status eZigbeeSqliteAddAlarmValue(uint64 u64MacAddress, uint16 u16AlarmVlaue);
+teSQ_Status eZigbeeSqliteAddDeviceID(uint64 u64MacAddress, uint16 u16DeviceID);
+teSQ_Status eZigbeeSqliteAddEndpoint(uint64 u64MacAddress, uint16 u16Endpoint);
+
+/****************************************************************************/
+/***        Local Functions                                               ***/
+/****************************************************************************/
+
+#if defined __cplusplus
+}
+#endif
+
+#endif  /* ZIGBEE_SQLITE_H_INCLUDED */
+
+/****************************************************************************/
+/***        END OF FILE                                                   ***/
+/****************************************************************************/
+

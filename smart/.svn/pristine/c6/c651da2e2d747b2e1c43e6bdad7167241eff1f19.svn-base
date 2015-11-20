@@ -1,0 +1,758 @@
+/****************************************************************************
+ *
+ * MODULE:             Zigbee - JIP daemon
+ *
+ * COMPONENT:          main
+ *
+ * REVISION:           $Revision: 43420 $
+ *
+ * DATED:              $Date: 2015-10-01 15:13:17 +0100 (Mon, 18 Jun 2012) $
+ *
+ * AUTHOR:             PCT
+ *
+ ****************************************************************************
+ *
+ * Copyright Tonly B.V. 2015. All rights reserved
+ *
+ ***************************************************************************/
+
+#include <getopt.h>
+#include <sys/resource.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+#include <signal.h>
+#include <libdaemon/daemon.h>
+#include "zigbee_type.h"
+#include "Utils.h"
+#include "Serial.h"
+#include "ZigbeeControlBridge.h"
+#include "SerialLink.h"
+#include "ZigbeeNetwork.h"
+#include "ZigbeeDevices.h"
+#include "ZigbeeSocketServer.h"
+
+/***********************************************************************************/
+const char *Version = "0.8";
+int verbosity = 0;
+static int iFlagAllowHandleReport = 0;
+/** Main loop running flag */
+pthread_mutex_t mutex_running;
+volatile sig_atomic_t   bRunning            = 1;
+
+/** Map of supported Zigbee and JIP devices */
+tsDeviceIDMap asDeviceIDMap[] = 
+{
+    { 0x0840, 0x08010010, eControlBridgeInitalise },
+    { 0x0100, 0x08011175, eOnOffLightInitalise }, /* ZLL mono lamp / HA on/off lamp */
+    { 0x0101, 0x08011175, eDimmerLightInitalise }, /* HA dimmable lamp */
+    { 0x0102, 0x08011750, eColourLightInitalise }, /* HA dimmable colour lamp */
+    { 0x0200, 0x08011750, eColourLightInitalise }, /* ZLL dimmable colour lamp */
+    { 0x0210, 0x08011750, eColourLightInitalise }, /* ZLL extended colour lamp */
+    { 0x0220, 0x08011750, eColourLightInitalise }, /* ZLL colour temperature lamp */
+    { 0x0108, 0x08011755, eWarmColdLigthInitalise}, /* PCT Cold & Warm Light*/
+    { 0x0302, 0x80011178, eTemperatureSensorInitalise }, /* Temp Humidity sensor */
+    { 0x0106, 0x80011179, eLightSensorInitalise }, /* Light sensor */
+    { 0x000c, 0x80011180, eSimpleSensorInitalise }, /* Simple sensor */
+    { 0x0051, 0x08011181, eColourLightInitalise }, /* Smart Plug */
+    { 0x0000, 0x00000000},
+};
+//uint16 au16ProfileZLL = E_ZB_PROFILEID_ZLL;
+uint16 au16ProfileHA = E_ZB_PROFILEID_HA;
+uint16 au16Cluster[] = {
+                            E_ZB_CLUSTERID_ONOFF,                   /*Light*/
+                            E_ZB_CLUSTERID_BINARY_INPUT_BASIC,      /*binary sensor*/
+                            E_ZB_CLUSTERID_TEMPERATURE,             /*tempertuare*/
+                            E_ZB_CLUSTERID_ILLUMINANCE              /*light sensor*/
+                            };
+
+/***********************************************************************************/
+#define CONFIG_DEFAULT_CHANNEL 15
+#define DBG_MAIN 1
+
+/***********************************************************************************/
+static void print_usage_exit(char *argv[]);
+static void vQuitSignalHandler (int sig);
+static void daemonize_init(const char *cmd);
+static int ZigbeeMatchEventHandle(tsZcbEvent *psEvent);
+static int ZigbeeAttributeReportEventHandle(tsZcbEvent *psEvent);
+static int ZigbeeTimeOutEventHandle(void);
+
+/***********************************************************************************/
+
+int main(int argc, char *argv[])
+{
+    signed char opt = 0;
+    int option_index = 0;
+    int daemonize = 1;
+    uint32 u32BaudRate = 0;
+    uint32 eChannel = 0;
+    char *cpSerialDevice = NULL;
+
+    printf("This is zigbee daemon program\n");
+
+    static struct option long_options[] =
+    {
+        {"serial",                  required_argument,  NULL, 's'},
+        {"help",                    no_argument,        NULL, 'h'},
+        {"verbosity",               required_argument,  NULL, 'v'},
+        {"baud",                    required_argument,  NULL, 'B'},
+        {"channel",                 required_argument,  NULL, 'c'},
+        { NULL, 0, NULL, 0}
+    };
+
+    while ((opt = getopt_long(argc, argv, "s:hfv:B:I:P:m:nc:p:6:", long_options, &option_index)) != -1) 
+    {
+        switch (opt) 
+        {
+            case 'h':
+                print_usage_exit(argv);
+            break;
+            case 'f':
+                daemonize = 0;
+            break;
+            case 'v':
+                verbosity = atoi(optarg);
+            break;
+            case 'B':
+            {
+                char *pcEnd;
+                errno = 0;
+                u32BaudRate = strtoul(optarg, &pcEnd, 0);
+                if (errno)
+                {
+                    printf("Baud rate '%s' cannot be converted to 32 bit integer (%s)\n", optarg, strerror(errno));
+                    print_usage_exit(argv);
+                }
+                if (*pcEnd != '\0')
+                {
+                    printf("Baud rate '%s' contains invalid characters\n", optarg);
+                    print_usage_exit(argv);
+                }
+                break;
+            }
+            case 's':
+                cpSerialDevice = optarg;
+            break;
+            case 'c':
+            {
+                char *pcEnd;
+                uint32 u32Channel;
+                errno = 0;
+                u32Channel = strtoul(optarg, &pcEnd, 0);
+                if (errno)
+                {
+                    printf("Channel '%s' cannot be converted to 32 bit integer (%s)\n", optarg, strerror(errno));
+                    print_usage_exit(argv);
+                }
+                if (*pcEnd != '\0')
+                {
+                    printf("Channel '%s' contains invalid characters\n", optarg);
+                    print_usage_exit(argv);
+                }
+                eChannel = u32Channel;
+                break;
+            }
+            case 0:
+            break;
+            default: /* '?' */
+            print_usage_exit(argv);
+        }
+    }
+
+    if ((!cpSerialDevice) || (0 == u32BaudRate))
+    {
+        print_usage_exit(argv);
+    }
+    
+    if (daemonize)
+    {
+        printf("Enter Daemon Mode...\n");
+        daemonize_init("ZigbeeDaemon");
+    }
+
+    pthread_mutex_init(&mutex_running, NULL);
+    signal(SIGTERM, vQuitSignalHandler);/* Install signal handlers */
+    signal(SIGINT,  vQuitSignalHandler);
+    if ((eSL_Init(cpSerialDevice, u32BaudRate) != E_SL_OK) || 
+        (eZCB_Init() != E_ZB_OK) || 
+        (eSocketServer_Init() != E_SS_OK))
+    {
+        ERR_vPrintf(T_TRUE, "Init compents failed \n");
+        
+        goto finish;
+    }
+
+    while (bRunning)
+    {
+        /* Keep attempting to connect to the control bridge */
+        if (eZCB_EstablishComms() == E_ZB_OK)
+        {
+            sleep(2);
+            break;
+        }
+        else
+        {
+            ERR_vPrintf(T_TRUE, "can't connect with coordinator \n");
+        }
+    }
+
+    while (bRunning)
+    {
+
+        tsZcbEvent *psEvent;
+        switch (eQueueDequeueTimed(&sZcbEventQueue, 1000, (void**)&psEvent))
+        {
+            case (E_QUEUE_OK):
+            {
+                switch (psEvent->eEvent)
+                {
+                    case (E_ZCB_EVENT_NETWORK_JOINED):
+                    case (E_ZCB_EVENT_NETWORK_FORMED):
+                    {
+                        LED_vPrintf(1, "coordinator\n");
+                        asDeviceIDMap[0].prInitaliseRoutine(&sZigbee_Network.sNodes);
+                        iFlagAllowHandleReport = 1;
+                        if(eZCB_MatchDescriptorRequest(E_ZB_BROADCAST_ADDRESS_RXONWHENIDLE, au16ProfileHA,
+                                                    sizeof(au16Cluster) / sizeof(uint16), au16Cluster, 
+                                                    0, NULL, NULL) != E_ZB_OK)
+                        {
+                            ERR_vPrintf(DBG_PCT, "Error sending match descriptor request\n");
+                        }
+                    }
+                    break;
+                    
+                    case (E_ZCB_EVENT_DEVICE_ANNOUNCE):
+                    {
+                        DBG_vPrintf(DBG_MAIN, "E_ZCB_EVENT_DEVICE_ANNOUNCE\n");
+                        tsZigbee_Node *ZigbeeAnnouceNode = psZigbee_FindNodeByShortAddress(psEvent->uData.sDeviceAnnounce.u16ShortAddress);
+                        eLockLock(&ZigbeeAnnouceNode->mutex);
+                        
+                        if(eZCB_MatchDescriptorRequest(ZigbeeAnnouceNode->u16ShortAddress, au16ProfileHA,
+                                                    sizeof(au16Cluster) / sizeof(uint16), au16Cluster, 
+                                                    0, NULL, NULL) != E_ZB_OK)
+                        {
+                            ERR_vPrintf(DBG_PCT, "Error sending match descriptor request\n");
+                        }
+                        
+                        eLockUnlock(&ZigbeeAnnouceNode->mutex);
+                        sleep(1);
+                    }
+                    break;
+                    
+                    case (E_ZCB_EVENT_DEVICE_MATCH):
+                    {
+                        DBG_vPrintf(DBG_MAIN, "\tE_ZCB_EVENT_DEVICE_MATCH\n");
+                        //ZigbeeMatchEventHandle(psEvent);
+                        static int iNumRequene = 0;
+                        tsZigbee_Node *ZigbeeMatchNode = psZigbee_FindNodeByShortAddress(psEvent->uData.sDeviceMatch.u16ShortAddress);
+                        if(!ZigbeeMatchNode)
+                        {
+                            ERR_vPrintf(T_TRUE, "can't find this node\n");
+                            break;
+                        }
+                        eLockLock(&ZigbeeMatchNode->mutex);
+                        if(0 != ZigbeeMatchNode->u16DeviceID)
+                        {
+                            DBG_vPrintf(DBG_MAIN, "\tDevice is already in the network\n");
+                            goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                        }
+                        if(!ZigbeeMatchNode->u64IEEEAddress)
+                        {
+                            DBG_vPrintf(DBG_MAIN, "Requesting new endpoint MAC Address\n");
+                            if (eZCB_IEEEAddressRequest(ZigbeeMatchNode) != E_ZB_OK)
+                            {
+                                ERR_vPrintf(T_TRUE, "Error retrieving IEEE Address of node 0x%04X - requeue\n", ZigbeeMatchNode->u16ShortAddress);
+                                if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+                                {
+                                    syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+                                    eLockLock(&sZigbee_Network.mutex);
+                                    if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+                                    {
+                                        ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                                        eLockUnlock(&sZigbee_Network.mutex);
+                                        goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                                    }
+                                    eLockUnlock(&sZigbee_Network.mutex);
+                                }
+                                else
+                                {
+                                    if(iNumRequene <= 5)
+                                    {
+                                        /* requeue event */
+                                        eQueueQueue(&sZcbEventQueue, psEvent);
+                                        psEvent = NULL;
+                                    }
+                                    goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                                }
+                            }
+
+                        }
+                        int i = 0;
+                        for (i = 0; i < ZigbeeMatchNode->u32NumEndpoints; i++)
+                        {
+                            if (ZigbeeMatchNode->pasEndpoints[i].u16ProfileID == 0)
+                            {
+                                DBG_vPrintf(DBG_MAIN, "Requesting new endpoint[%d] simple descriptor\n",i);
+                                if (eZCB_SimpleDescriptorRequest(ZigbeeMatchNode, ZigbeeMatchNode->pasEndpoints[i].u8Endpoint) != E_ZB_OK)
+                                {
+                                    ERR_vPrintf(T_TRUE, "Failed to read endpoint simple descriptor - requeue\n");
+                                    if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+                                    {
+                                        syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+                                        eLockLock(&sZigbee_Network.mutex);
+                                        if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+                                        {
+                                            ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                                            eLockUnlock(&sZigbee_Network.mutex);
+                                            goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                                        }
+                                        eLockUnlock(&sZigbee_Network.mutex);
+                                    }
+                                    else
+                                    {
+                                        if(iNumRequene <= 5)
+                                        {
+                                            DBG_vPrintf(DBG_MAIN, "requeue event\n");
+                                            /* requeue event */
+                                            eQueueQueue(&sZcbEventQueue, psEvent);
+                                            psEvent = NULL;
+                                        }
+                                        goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                                    }
+                                }
+                            }
+                        }
+                        teZbStatus eStatus = eZCB_AddGroupMembership(ZigbeeMatchNode, 0xf00f);
+                        if ( (eStatus != E_ZB_OK) && (eStatus != E_ZB_DUPLICATE_EXISTS) && (eStatus != E_ZB_UNKNOWN_CLUSTER))
+                        {
+                            ERR_vPrintf(DBG_MAIN, "Failed to add device into group 0xf00f - requeue\n");
+                            if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+                            {
+                                syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+                                eLockLock(&sZigbee_Network.mutex);
+                                if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+                                {
+                                    ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                                    eLockUnlock(&sZigbee_Network.mutex);
+                                    goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                                }
+                            }
+                            else
+                            {
+                                if(iNumRequene <= 5)
+                                {
+                                    DBG_vPrintf(DBG_MAIN, "requeue event\n");
+                                    /* requeue event */
+                                    eQueueQueue(&sZcbEventQueue, psEvent);
+                                    psEvent = NULL;
+                                }
+                                goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                            }
+                        }
+
+                        DBG_vPrintf(DBG_MAIN, "Init Device 0x%04x\n",ZigbeeMatchNode->u16DeviceID);
+                        tsDeviceIDMap *psDeviceIDMap = asDeviceIDMap;
+                        while (((psDeviceIDMap->u16ZigbeeDeviceID != 0) &&
+                        (psDeviceIDMap->prInitaliseRoutine != NULL)))
+                        {
+                            if (psDeviceIDMap->u16ZigbeeDeviceID == ZigbeeMatchNode->u16DeviceID)
+                            {
+                                DBG_vPrintf(DBG_MAIN, "Found JIP device type 0x%08X for Zigbee Device type 0x%04X\n",
+                                psDeviceIDMap->u32JIPDeviceID, psDeviceIDMap->u16ZigbeeDeviceID);
+                                DBG_vPrintf(DBG_MAIN, "Calling Zigbee Initlise Function\n");
+                                psDeviceIDMap->prInitaliseRoutine(ZigbeeMatchNode);
+                            }
+
+                            /* Next device map */
+                            psDeviceIDMap++;
+                        }
+
+                        E_ZCB_EVENT_DEVICE_MATCH_done:
+                        eLockUnlock(&ZigbeeMatchNode->mutex);                    
+                    }
+                    break;
+                    
+                    case (E_ZCB_EVENT_ATTRIBUTE_REPORT):
+                    {
+                        DBG_vPrintf(DBG_MAIN, "E_ZCB_EVENT_ATTRIBUTE_REPORT\n");
+                        ZigbeeAttributeReportEventHandle(psEvent);
+                    }
+                    break;
+                    default:
+                        break;
+                }
+                
+                free(psEvent);
+                psEvent = NULL;
+                break;
+            }
+            
+            case (E_QUEUE_ERROR_TIMEOUT)://Check Devices Comms
+            {
+                ZigbeeTimeOutEventHandle();
+                break;
+            }
+            default:
+                DBG_vPrintf(DBG_MAIN, "Unknown return\n");
+        }/*eQueueDequeueTimed*/   
+    }
+
+    eZCB_Finish();
+    eSL_Destroy();
+    eSocketServer_Destroy();
+finish:
+    if (daemonize)
+        syslog(LOG_INFO, "Daemon process exiting");  
+    else
+        syslog(LOG_INFO, "Exiting");
+
+	return 0;
+}
+
+static int ZigbeeTimeOutEventHandle(void)
+{
+    static uint8 time = 0;
+    static uint8 time_search = 0;
+    time ++;
+    if(time == 2)
+    {
+        time_search++;
+        eLockLock(&sZigbee_Network.mutex);
+        tsZigbee_Node* tempNodes = &sZigbee_Network.sNodes;
+        while(tempNodes != NULL)
+        {
+            if((tempNodes->device_name != NULL) && (tempNodes->u64IEEEAddress != 0))
+            {
+                if(0 == iZigbee_DeviceTimedOut(tempNodes))
+                {
+                    INF_vPrintf(1, "Nodes name is %s, Id is 0x%04x, MAC is 0x%016llX\n",
+                        tempNodes->device_name,tempNodes->u16DeviceID,tempNodes->u64IEEEAddress);
+                }
+                else
+                {
+                    eLockLock(&tempNodes->mutex);
+                    if (eZigbee_RemoveNode(tempNodes) != E_ZB_OK)
+                    {
+                        ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                        eLockUnlock(&tempNodes->mutex); 
+                    }
+                    break;//Devices remove success
+                }
+            }
+            tempNodes = tempNodes->psNext;
+        }
+        eLockUnlock(&sZigbee_Network.mutex);                   
+        time = 0;
+    }
+    if(30 == time_search)//60s
+    {
+        //retry search the device
+        if(eZCB_MatchDescriptorRequest(E_ZB_BROADCAST_ADDRESS_RXONWHENIDLE, au16ProfileHA,
+                                    sizeof(au16Cluster) / sizeof(uint16), au16Cluster, 
+                                    0, NULL, NULL) != E_ZB_OK)
+        {
+            ERR_vPrintf(DBG_PCT, "Error sending match descriptor request\n");
+        }
+        time_search = 0;
+    }
+    return 0;
+}
+
+static int ZigbeeAttributeReportEventHandle(tsZcbEvent *psEvent)
+{
+    if(iFlagAllowHandleReport)
+    {
+        DBG_vPrintf(DBG_MAIN, "psZigbee_FindNodeByShortAddress 0x%04x\n", psEvent->uData.sAttributeReport.u16ShortAddress);
+        tsZigbee_Node *pZigbee_Node = psZigbee_FindNodeByShortAddress(psEvent->uData.sAttributeReport.u16ShortAddress);
+        if (!pZigbee_Node)
+        {
+            DBG_vPrintf(DBG_MAIN, "No JIP device for Zigbee node \n");
+            //retry search the device
+            if(eZCB_MatchDescriptorRequest(E_ZB_BROADCAST_ADDRESS_RXONWHENIDLE, au16ProfileHA,
+                                        sizeof(au16Cluster) / sizeof(uint16), au16Cluster, 
+                                        0, NULL, NULL) != E_ZB_OK)
+            {
+                ERR_vPrintf(DBG_PCT, "Error sending match descriptor request\n");
+            }
+        }
+        else
+        {
+            eLockLock(&pZigbee_Node->mutex);
+            DBG_vPrintf(DBG_MAIN, "Update Device's Attribute\n");
+            if(NULL != pZigbee_Node->Method.DeviceAttributeUpdate)
+            {
+                pZigbee_Node->Method.DeviceAttributeUpdate(pZigbee_Node,
+                    psEvent->uData.sAttributeReport.u16ClusterID,
+                    psEvent->uData.sAttributeReport.u16AttributeID,
+                    psEvent->uData.sAttributeReport.eType,
+                    psEvent->uData.sAttributeReport.uData);
+            }
+            else
+            {
+                ERR_vPrintf(DBG_MAIN, "Update Device's Attribute Fun Can't Find\n");
+            }
+            eLockUnlock(&pZigbee_Node->mutex);
+        }
+    }
+
+    return 0;
+}
+
+static int ZigbeeMatchEventHandle(tsZcbEvent *psEvent)
+{                        
+    static int iNumRequene = 0;
+    tsZigbee_Node *ZigbeeMatchNode = psZigbee_FindNodeByShortAddress(psEvent->uData.sDeviceMatch.u16ShortAddress);
+    if(!ZigbeeMatchNode)
+    {
+        ERR_vPrintf(T_TRUE, "can't find this node\n");
+        return 1;
+    }
+    eLockLock(&ZigbeeMatchNode->mutex);
+    if(0 != ZigbeeMatchNode->u16DeviceID)
+    {
+        DBG_vPrintf(DBG_MAIN, "\tDevice is already in the network\n");
+        goto E_ZCB_EVENT_DEVICE_MATCH_done;
+    }
+    if(!ZigbeeMatchNode->u64IEEEAddress)
+    {
+        DBG_vPrintf(DBG_MAIN, "Requesting new endpoint MAC Address\n");
+        if (eZCB_IEEEAddressRequest(ZigbeeMatchNode) != E_ZB_OK)
+        {
+            ERR_vPrintf(T_TRUE, "Error retrieving IEEE Address of node 0x%04X - requeue\n", ZigbeeMatchNode->u16ShortAddress);
+            if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+            {
+                syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+                eLockLock(&sZigbee_Network.mutex);
+                if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+                {
+                    ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                    eLockUnlock(&sZigbee_Network.mutex);
+                    goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                }
+                eLockUnlock(&sZigbee_Network.mutex);
+            }
+            else
+            {
+                if(iNumRequene <= 5)
+                {
+                    /* requeue event */
+                    eQueueQueue(&sZcbEventQueue, psEvent);
+                    psEvent = NULL;
+                }
+                goto E_ZCB_EVENT_DEVICE_MATCH_done;
+            }
+        }
+
+    }
+    int i = 0;
+    for (i = 0; i < ZigbeeMatchNode->u32NumEndpoints; i++)
+    {
+        if (ZigbeeMatchNode->pasEndpoints[i].u16ProfileID == 0)
+        {
+            DBG_vPrintf(DBG_MAIN, "Requesting new endpoint[%d] simple descriptor\n",i);
+            if (eZCB_SimpleDescriptorRequest(ZigbeeMatchNode, ZigbeeMatchNode->pasEndpoints[i].u8Endpoint) != E_ZB_OK)
+            {
+                ERR_vPrintf(T_TRUE, "Failed to read endpoint simple descriptor - requeue\n");
+                if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+                {
+                    syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+                    eLockLock(&sZigbee_Network.mutex);
+                    if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+                    {
+                        ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                        eLockUnlock(&sZigbee_Network.mutex);
+                        goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                    }
+                    eLockUnlock(&sZigbee_Network.mutex);
+                }
+                else
+                {
+                    if(iNumRequene <= 5)
+                    {
+                        DBG_vPrintf(DBG_MAIN, "requeue event\n");
+                        /* requeue event */
+                        eQueueQueue(&sZcbEventQueue, psEvent);
+                        psEvent = NULL;
+                    }
+                    goto E_ZCB_EVENT_DEVICE_MATCH_done;
+                }
+            }
+        }
+    }
+    teZbStatus eStatus = eZCB_AddGroupMembership(ZigbeeMatchNode, 0xf00f);
+    if ( (eStatus != E_ZB_OK) && (eStatus != E_ZB_DUPLICATE_EXISTS) && (eStatus != E_ZB_UNKNOWN_CLUSTER))
+    {
+        ERR_vPrintf(DBG_MAIN, "Failed to add device into group 0xf00f - requeue\n");
+        if (iZigbee_DeviceTimedOut(ZigbeeMatchNode))
+        {
+            syslog(LOG_INFO, "Zigbee node 0x%04X removed from network (no response to IEEE Address).\n", ZigbeeMatchNode->u16ShortAddress);
+            eLockLock(&sZigbee_Network.mutex);
+            if (eZigbee_RemoveNode(ZigbeeMatchNode) != E_ZB_OK)
+            {
+                ERR_vPrintf(T_TRUE, "Error removing node from ZCB\n");
+                eLockUnlock(&sZigbee_Network.mutex);
+                goto E_ZCB_EVENT_DEVICE_MATCH_done;
+            }
+        }
+        else
+        {
+            if(iNumRequene <= 5)
+            {
+                DBG_vPrintf(DBG_MAIN, "requeue event\n");
+                /* requeue event */
+                eQueueQueue(&sZcbEventQueue, psEvent);
+                psEvent = NULL;
+            }
+            goto E_ZCB_EVENT_DEVICE_MATCH_done;
+        }
+    }
+
+    DBG_vPrintf(DBG_MAIN, "Init Device 0x%04x\n",ZigbeeMatchNode->u16DeviceID);
+    tsDeviceIDMap *psDeviceIDMap = asDeviceIDMap;
+    while (((psDeviceIDMap->u16ZigbeeDeviceID != 0) &&
+    (psDeviceIDMap->prInitaliseRoutine != NULL)))
+    {
+        if (psDeviceIDMap->u16ZigbeeDeviceID == ZigbeeMatchNode->u16DeviceID)
+        {
+            DBG_vPrintf(DBG_MAIN, "Found JIP device type 0x%08X for Zigbee Device type 0x%04X\n",
+            psDeviceIDMap->u32JIPDeviceID, psDeviceIDMap->u16ZigbeeDeviceID);
+            DBG_vPrintf(DBG_MAIN, "Calling Zigbee Initlise Function\n");
+            psDeviceIDMap->prInitaliseRoutine(ZigbeeMatchNode);
+        }
+
+        /* Next device map */
+        psDeviceIDMap++;
+    }
+
+    E_ZCB_EVENT_DEVICE_MATCH_done:
+    eLockUnlock(&ZigbeeMatchNode->mutex);     
+return 0;
+}
+
+
+static void print_usage_exit(char *argv[])
+{
+    fprintf(stderr, "\t******************************************************\n");
+    fprintf(stderr, "\t*         zigbee-jip-daemon Version: %s            *\n", Version);
+    fprintf(stderr, "\t******************************************************\n");
+    fprintf(stderr, "\t************************Release***********************\n");
+    fprintf(stderr, "\t*1. Add Leave Device Interface                       *\n");
+    fprintf(stderr, "\t*2. Store Color Light's RGB Value                    *\n");
+    fprintf(stderr, "\t*3. Add the Fun of RGB to HSV                        *\n");
+    
+    fprintf(stderr, "Usage: %s\n", argv[0]);
+    fprintf(stderr, "  Arguments:\n");
+    fprintf(stderr, "    -s --serial        <serial device>     Serial device for 15.4 module, e.g. /dev/tts/1\n");
+    fprintf(stderr, "  Options:\n");
+    fprintf(stderr, "    -h --help                              Print this help.\n");
+    fprintf(stderr, "    -v --verbosity     <verbosity>         Verbosity level. Increases amount of debug information. Default off.\n");
+    fprintf(stderr, "    -B --baud          <baud rate>         Baud rate to communicate with border router node at. Default 230400\n");
+
+    fprintf(stderr, "  Zigbee Network options:\n");
+    fprintf(stderr, "    -c --channel       <channel>           802.15.4 channel to run on. Default 15.\n");
+    exit(0);
+}
+
+static void vQuitSignalHandler (int sig)
+{
+    DBG_vPrintf(DBG_MAIN, "Got signal %d\n", sig); 
+    pthread_mutex_lock(&mutex_running);
+    bRunning = 0;
+    pthread_mutex_unlock(&mutex_running);
+    
+    return;
+}
+static void daemonize_init(const char *cmd)
+{
+    int i, fd0, fd1, fd2;
+    pid_t pid;
+    struct rlimit rl;
+    struct sigaction sa;
+    /*
+    * Clear file creation mask.
+    */
+    umask(0);
+    /*
+    * Get maximum number of file descriptors.
+    */
+    if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
+    {
+        ERR_vPrintf(T_TRUE,"%s: can't get file limit", cmd);
+        exit(-1);
+    }
+    /*
+    * Become a session leader to lose controlling TTY.
+    */
+    if ((pid = fork()) < 0)
+    {
+        ERR_vPrintf(T_TRUE,"%s: can't fork, exit(-1)\n", cmd);
+        exit(-1);
+    }
+    else if (pid != 0) /* parent */
+    {
+        DBG_vPrintf(T_TRUE,"This is Parent Program, exit(0)\n");
+        exit(0);
+    }
+
+    setsid();
+    /*
+    * Ensure future opens won't allocate controlling TTYs.
+    */
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGHUP, &sa, NULL) < 0)
+    {
+        ERR_vPrintf(T_TRUE,"%s: can't ignore SIGHUP", cmd);
+        exit(-1);
+    }
+    if ((pid = fork()) < 0)
+    {
+        ERR_vPrintf(T_TRUE,"%s: can't fork, exit(-1)\n", cmd);
+        exit(-1);
+    }
+    else if (pid != 0) /* parent */
+    {
+        DBG_vPrintf(T_TRUE,"This is Parent Program, exit(0)\n");
+        exit(0);
+    }
+    /*
+    * Change the current working directory to the root so
+    * we won't prevent file systems from being unmounted.
+    */
+    if (chdir("/") < 0)
+    {
+        ERR_vPrintf(T_TRUE,"%s: can,t change directory to /", cmd);
+        exit(-1);
+    }
+    /*
+    * Close all open file descriptors.
+    */
+    if (rl.rlim_max == RLIM_INFINITY)
+    {
+        rl.rlim_max = 1024;
+    }
+    for (i = 0; i < rl.rlim_max; i++)
+    {
+        close(i);
+    }
+    /*
+    * Attach file descriptors 0, 1, and 2 to /dev/null.
+    */
+    fd0 = open("/dev/null", O_RDWR);
+    fd1 = dup(0);
+    fd2 = dup(0);
+    /*
+    * Initialize the log file.
+    */
+    openlog(cmd, LOG_CONS, LOG_DAEMON);
+    if (fd0 != 0 || fd1 != 1 || fd2 != 2) 
+    {
+        ERR_vPrintf(T_TRUE, "unexpected file descriptors %d %d %d",fd0, fd1, fd2);
+        exit(1);
+    }
+}
+
+
