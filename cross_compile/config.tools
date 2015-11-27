@@ -1,0 +1,19 @@
+TOOLS_DIR:=/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/bin
+AR=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-ar 
+AS=$(TOOLS_DIR)mipsel-openwrt-linux-uclibc-gcc -c -Os -pipe -mno-branch-likely -mips32r2 -mtune=24kec -mdsp -fno-caller-saves -fhonour-copts -Wno-error=unused-but-set-variable -msoft-float
+LD=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-ld 
+NM=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-nm 
+CC=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-gcc
+GCC=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-gcc
+CXX=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-g++
+RANLIB=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-ranlib 
+STRIP=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-strip 
+OBJCOPY=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-objcopy 
+OBJDUMP=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-objdump 
+SIZE=$(TOOLS_DIR)/mipsel-openwrt-linux-uclibc-size 
+CFLAGS=-Os -pipe -mno-branch-likely -mips32r2 -mtune=24kec -mdsp -fno-caller-saves -fhonour-copts -Wno-error=unused-but-set-variable -msoft-float
+CXXFLAGS=-Os -pipe -mno-branch-likely -mips32r2 -mtune=24kec -mdsp -fno-caller-saves -fhonour-copts -Wno-error=unused-but-set-variable -msoft-float
+CPPFLAGS=-I/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2/usr/include -I/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2/include -I/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/usr/include -I/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/include 
+LDFLAGS=-L/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2/usr/lib -L/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2/lib -L/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/usr/lib -L/home/pct/ubuntu-x86/kiwi/7628/OpenWRT_WK1529_SDKv3.2/OpenWRT_WK1529_SDKv3.2/Tonly_OpenWRT/staging_dir/toolchain-mipsel_24kec+dsp_gcc-4.8-linaro_uClibc-0.9.33.2/lib
+
+#export $(AR) $(AR) $(LD) $(NM) $(CC) $(GCC) $(CXX) $(RANLIB) $(STRIP) $(OBJCOPY) $(OBJDUMP) $(SIZE) $(CFLAGS) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS)

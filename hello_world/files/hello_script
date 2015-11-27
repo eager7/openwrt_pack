@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2015 PCT
+
+START=97
+
+PROG=hello_world
+
+
+start () {
+    $PROG &
+}
+
+
+stop () {
+    killall $PROG
+}
+
