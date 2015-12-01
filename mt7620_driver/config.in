@@ -1,0 +1,74 @@
+if	PACKAGE_kmod-mt7620_driver
+
+config FIRST_IF_RT2860
+    bool
+    default y
+    depends on PACKAGE_kmod-mt7620_driver
+
+config RALINK_MT7620
+    bool
+    default y
+    depends on PACKAGE_kmod-mt7620_driver
+
+config RT_FIRST_CARD
+    int
+    depends on PACKAGE_kmod-mt7620_driver
+    default 2860
+
+config RT_FIRST_CARD_EEPROM
+    string
+    depends on FIRST_IF_RT2860
+    default "flash"
+
+config  RT2860V2_STA_WPA_SUPPLICANT
+	bool "WPA Supplicant"
+	depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_STA_LED
+	bool "LED Support"
+	depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_STA_WSC
+	bool "WSC (WiFi Simple Config)"
+	depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_STA_WSC_V2
+	bool "WSC 2.0(WiFi Simple Config 2.0)"
+	depends on RT2860V2_STA_WSC
+
+config  RT2860V2_STA_DLS
+	bool "DLS ((Direct-Link Setup) Support"
+	depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_HW_STA_ANTENNA_DIVERSITY
+	bool "Antenna Diversity Support"
+	depends on PACKAGE_kmod-mt7620_driver
+	depends on RALINK_RT5350
+
+config  RT2860V2_STA_VIDEO_TURBINE
+	bool "Video Turbine support"
+	depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_STA_RTMP_INTERNAL_TX_ALC
+        bool "TSSI Compensation"
+        depends on PACKAGE_kmod-mt7620_driver
+        depends on RALINK_RT3350 || RALINK_RT3352 || RALINK_RT5350 || RALINK_MT7620 || RALINK_RT6352
+
+config  RT2860V2_STA_INTELLIGENT_RATE_ADAPTION
+	bool "Intelligent Rate Adaption"
+	depends on PACKAGE_kmod-mt7620_driver
+	depends on RALINK_RT2883 || RALINK_RT3883 
+
+config  RT2860V2_STA_TXBF
+	bool "Tx Bean Forming Support (Only 3883)"
+	depends on PACKAGE_kmod-mt7620_driver
+	depends on RALINK_RT2883 || RALINK_RT3883 
+
+config  RT2860V2_STA_80211N_DRAFT3
+        bool "802.11n Draft3"
+        depends on PACKAGE_kmod-mt7620_driver
+
+config  RT2860V2_STA_P2P
+        bool "Wireless Direct(P2P)"
+        depends on PACKAGE_kmod-mt7620_driver
+endif

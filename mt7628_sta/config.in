@@ -1,0 +1,20 @@
+if	PACKAGE_kmod-mt7628_sta
+config MT_STA_SUPPORT
+	tristate "Mediatek 802.11n STA support"
+#	depends on NET_RADIO 
+	select WIRELESS_EXT
+	select WEXT_SPY
+	select WEXT_PRIV
+
+config RALINK_MT7628
+	bool
+	default y
+	depends on PACKAGE_kmod-mt7628_sta
+	
+config MT_MAC
+	bool
+	default y
+	depends on PACKAGE_kmod-mt7628_sta
+	
+endif
+
