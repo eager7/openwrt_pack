@@ -18,7 +18,8 @@
 #include <asm/io.h>
 #include <linux/poll.h>
 #include <asm/uaccess.h>
-
+//#include "../linux-3.10.14/drivers/char/ralink_gpio.h"
+#include <asm/rt2880/rt_mmap.h>
 /****************************************************************************/
 /***        Macro Definitions                                             ***/
 /****************************************************************************/
@@ -27,6 +28,18 @@
 
 #define GPIO_NUM 1
 #define GPIO_NAME "gpio_control"
+
+//////////////////////////REGISTER ADDRESS////////////////////////////
+#define RALINK_SYSCTL_ADDR		RALINK_SYSCTL_BASE	// system control
+#define RALINK_REG_GPIOMODE		(RALINK_SYSCTL_ADDR + 0x60)
+#define RALINK_REG_GPIOMODE2		(RALINK_SYSCTL_ADDR + 0x64)
+#define RALINK_IRQ_ADDR			RALINK_INTCL_BASE
+#define RALINK_PRGIO_ADDR		RALINK_PIO_BASE // Programmable I/O
+#define RALINK_REG_PIODIR		(RALINK_PRGIO_ADDR + 0x00)
+#define RALINK_REG_PIOEDGE		(RALINK_PRGIO_ADDR + 0x04)
+#define RALINK_REG_PIODATA		(RALINK_PRGIO_ADDR + 0x20)
+#define RALINK_REG_PIODATA2		(RALINK_PRGIO_ADDR + 0x24)
+
 /****************************************************************************/
 /***        Type Definitions                                              ***/
 /****************************************************************************/
@@ -74,7 +87,53 @@ struct cdev cdev;
 /****************************************************************************/
 /***        Local    Functions                                            ***/
 /****************************************************************************/
+static void led_init()
+{
+	//GPIO#1, set IO mode and output
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) &= cpu_to_le32(~(0x03<<6));//clear the 6&7 bit
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) |=  cpu_to_le32((0x01<<6));//set the 6&7 bit
+	(*(volatile u32 *)RALINK_REG_PIODIR) &= cpu_to_le32(~(0x01<<1));
+	(*(volatile u32 *)RALINK_REG_PIODIR) |=  cpu_to_le32((0x01<<1));
+	
+	//RESET,GPIO#36, set IO mode and output
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) &= cpu_to_le32(~(0x01<<16));//clear the 16 bit
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) |=  cpu_to_le32((0x01<<16));//set the 16 bit
+	(*(volatile u32 *)RALINK_REG_PIOEDGE) &= cpu_to_le32(~(0x01<<4));
+	(*(volatile u32 *)RALINK_REG_PIOEDGE) |=  cpu_to_le32((0x01<<4));
+	
+	//MISO,GPIO#6, set IO mode and output
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) &= cpu_to_le32(~(0x03<<4));//clear the 4&5 bit
+	(*(volatile u32 *)RALINK_REG_GPIOMODE) |=  cpu_to_le32((0x01<<4));//set the 4&5 bit
+	(*(volatile u32 *)RALINK_REG_PIODIR) &= cpu_to_le32(~(0x01<<6));
+	(*(volatile u32 *)RALINK_REG_PIODIR) |=  cpu_to_le32((0x01<<6));
+}
 
+static void led_on()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA) |= cpu_to_le32(0x01<<1);
+}
+static void led_off()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA) &= cpu_to_le32(~(0x01<<1));
+}
+
+static void reset_on()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA2) |= cpu_to_le32(0x01<<4);
+}
+static void reset_off()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA2) &= cpu_to_le32(~(0x01<<4));
+}
+
+static void spimiso_on()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA) |= cpu_to_le32(0x01<<6);
+}
+static void spimiso_off()
+{
+	(*(volatile u32 *)RALINK_REG_PIODATA) &= cpu_to_le32(~(0x01<<6));
+}
 
 static int __init gpio_init(void)
 {
@@ -103,6 +162,10 @@ static int __init gpio_init(void)
 	printk(KERN_DEBUG "cdev_add\n");
 	cdev_add(&cdev, MKDEV(gpio_major, gpio_minor), GPIO_NUM);//regedit the device
 	
+	led_init();
+	led_on();
+	reset_on();
+	spimiso_on();
     return 0;
 }
 
@@ -153,14 +216,16 @@ long gpio_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	printk(KERN_DEBUG "gpio_ioctl\n");
 	switch(cmd){
 		case 1:{
-			printk(KERN_DEBUG "gpio_ioctl 1\n");
-		}
+			printk(KERN_DEBUG "gpio_ioctl 1, arg %ld\n", arg);
+			led_on();
+		}break;
 		case 2:{
-			printk(KERN_DEBUG "gpio_ioctl 2\n");
-		}
+			printk(KERN_DEBUG "gpio_ioctl 2, arg %ld\n", arg);
+			led_off();
+		}break;
 		case 3:{
-			printk(KERN_DEBUG "gpio_ioctl 3\n");
-		}
+			printk(KERN_DEBUG "gpio_ioctl 3, arg %ld\n", arg);
+		}break;
 
 	}
 	return 0;
